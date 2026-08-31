@@ -23,6 +23,16 @@ Panel {
   property int vaultIndex: 0
   property bool cursorActive: false
 
+  // The vault whose tab is selected. "" until vaults arrive.
+  readonly property string activeShareId:
+    pass.vaults[vaultIndex] ? pass.vaults[vaultIndex].shareId : ""
+  readonly property string activeVaultName:
+    pass.vaults[vaultIndex] ? pass.vaults[vaultIndex].name : ""
+
+  // Pull the selected vault's items whenever the selection changes (and the
+  // panel is open). loadItems() serves its cache instantly on a re-visit.
+  onActiveShareIdChanged: if (opened && activeShareId !== "") pass.loadItems(activeShareId, false)
+
   // ── Theme shortcuts (identical to the dropbox/VPN plugins) ────────────
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -87,6 +97,7 @@ Panel {
       pass.refresh()
       pass.loadVaults(false)
       ensureCursor()
+      if (activeShareId !== "") pass.loadItems(activeShareId, false)
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     }
   }
@@ -259,14 +270,22 @@ Panel {
               }
             }
 
+            // Marco 3 proof-of-life: the item pipeline works, shown as a
+            // count. The actual list of rows is Marco 4.
             Text {
               width: parent.width
-              text: "Items for “" + (pass.vaults[root.vaultIndex] ? pass.vaults[root.vaultIndex].name : "") + "” land in Marco 4."
               textFormat: Text.PlainText
-              color: root.dim
+              color: pass.itemsError !== "" ? root.urgent : root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
+              text: {
+                if (pass.itemsError !== "") return pass.itemsError
+                if (pass.itemsLoading) return "Loading items…"
+                if (pass.itemsShareId !== root.activeShareId) return ""
+                var n = pass.items.length
+                return n + (n === 1 ? " item" : " items") + " in “" + root.activeVaultName + "” — list in Marco 4"
+              }
             }
           }
         }
