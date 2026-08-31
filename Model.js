@@ -68,13 +68,25 @@ function parseItems(raw) {
         id: id,
         shareId: String(it.share_id || ""),
         title: String(it.title || "Untitled"),
-        type: String(it.item_type || "login")
+        type: String(it.item_type || "login"),
+        modifyTime: String(it.modify_time || "")
       })
     }
   } catch (e) {
     return []
   }
-  return out
+  return sortItems(out)
+}
+
+// Newest first (by modify_time, an ISO-ish string that sorts lexically),
+// ties broken by title. Used for every vault view and the merged "All".
+function sortItems(items) {
+  return items.slice().sort(function(a, b) {
+    var ta = String(a.modifyTime || ""), tb = String(b.modifyTime || "")
+    if (ta !== tb) return ta < tb ? 1 : -1
+    var na = String(a.title || "").toLowerCase(), nb = String(b.title || "").toLowerCase()
+    return na < nb ? -1 : (na > nb ? 1 : 0)
+  })
 }
 
 // `pass-cli item view "pass://<shareId>/<id>" --output json`
@@ -108,6 +120,18 @@ function parseItemDetail(raw) {
 function loginIdentifier(detail) {
   if (!detail) return ""
   return detail.username !== "" ? detail.username : detail.email
+}
+
+// Case-insensitive substring filter over item titles. Empty query returns
+// the list unchanged (same object, so bindings don't churn).
+function filterItems(items, query) {
+  var q = String(query || "").trim().toLowerCase()
+  if (q === "") return items
+  var out = []
+  for (var i = 0; i < items.length; i++) {
+    if (String(items[i].title || "").toLowerCase().indexOf(q) !== -1) out.push(items[i])
+  }
+  return out
 }
 
 // Human label per item type, for the row subtitle.

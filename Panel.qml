@@ -29,11 +29,17 @@ Panel {
   property int iconIndex: 0
   property bool cursorActive: false
 
+  // Text typed into the "/" filter. Narrows the vault's item list by title.
+  property string filterQuery: ""
+  readonly property var filteredItems: Model.filterItems(pass.items, filterQuery)
+  // The item the cursor is on, after filtering.
+  readonly property var focusedItem: filteredItems[itemIndex] || null
+
   // The copy icons the focused item offers (also the left/right order).
-  readonly property var itemIcons:
-    Model.copyIconsFor(pass.items[itemIndex] ? pass.items[itemIndex].type : "")
+  readonly property var itemIcons: Model.copyIconsFor(focusedItem ? focusedItem.type : "")
 
   onItemIndexChanged: iconIndex = 0
+  onFilterQueryChanged: { itemIndex = 0; iconIndex = 0; ensureCursor() }
 
   function itemKey(it) {
     return it ? (String(it.shareId) + "/" + String(it.id)) : ""
@@ -46,34 +52,49 @@ Panel {
     pass.copyItemField(it.shareId, it.id, kind)
   }
 
-  // The vault whose tab is selected. "" until vaults arrive.
-  readonly property string activeShareId:
-    pass.vaults[vaultIndex] ? pass.vaults[vaultIndex].shareId : ""
-  readonly property string activeVaultName:
-    pass.vaults[vaultIndex] ? pass.vaults[vaultIndex].name : ""
+  // The dropdown options: a synthetic "All items" first (only worth it
+  // with more than one vault), then one entry per real vault. `vaultIndex`
+  // indexes THIS list, not pass.vaults.
+  readonly property var vaultOptions: {
+    var out = pass.vaults.map(function(v) { return { value: v.shareId, label: v.name } })
+    if (pass.vaults.length > 1) out.unshift({ value: pass.allVaultsId, label: "All items" })
+    return out
+  }
 
-  // { value: shareId, label: name } for the Dropdown.
-  readonly property var vaultOptions: pass.vaults.map(function(v) {
-    return { value: v.shareId, label: v.name }
-  })
+  readonly property string activeShareId:
+    vaultOptions[vaultIndex] ? vaultOptions[vaultIndex].value : ""
+  readonly property string activeVaultName:
+    vaultOptions[vaultIndex] ? vaultOptions[vaultIndex].label : ""
+  readonly property bool allView: activeShareId === pass.allVaultsId
 
   function selectVaultByShareId(shareId) {
-    for (var i = 0; i < pass.vaults.length; i++) {
-      if (pass.vaults[i].shareId === String(shareId)) { vaultIndex = i; return }
+    for (var i = 0; i < vaultOptions.length; i++) {
+      if (vaultOptions[i].value === String(shareId)) { vaultIndex = i; return }
     }
   }
 
-  // True once the visible `items` really belong to the selected vault and
-  // there's something to show — the gate for the "items" cursor section.
+  function vaultNameFor(shareId) {
+    for (var i = 0; i < pass.vaults.length; i++) {
+      if (pass.vaults[i].shareId === String(shareId)) return pass.vaults[i].name
+    }
+    return ""
+  }
+
+  // The selected vault's items are loaded and non-empty — gates the filter
+  // field and the section header.
   readonly property bool itemsReady:
     pass.loggedIn && pass.itemsShareId === activeShareId
     && !pass.itemsLoading && pass.items.length > 0
+  // …and at least one survives the current filter — gates the "items"
+  // cursor section and the rows themselves.
+  readonly property bool hasVisibleItems: itemsReady && filteredItems.length > 0
 
   // Pull the selected vault's items whenever the selection changes (and the
   // panel is open). loadItems() serves its cache instantly on a re-visit.
   onActiveShareIdChanged: {
     itemIndex = 0
     iconIndex = 0
+    filterQuery = ""
     if (opened && activeShareId !== "") pass.loadItems(activeShareId, false)
   }
 
@@ -101,15 +122,15 @@ Panel {
     if (!pass.installed) return ["install"]
     if (!pass.loggedIn) return ["login"]
     if (pass.vaults.length === 0) return ["header"]
-    return itemsReady ? ["vault", "items"] : ["vault"]
+    return hasVisibleItems ? ["vault", "items"] : ["vault"]
   }
 
   function ensureCursor() {
     var list = sectionList()
     if (list.indexOf(focusSection) === -1) focusSection = list[0]
-    if (vaultIndex >= pass.vaults.length) vaultIndex = Math.max(0, pass.vaults.length - 1)
+    if (vaultIndex >= vaultOptions.length) vaultIndex = Math.max(0, vaultOptions.length - 1)
     if (vaultIndex < 0) vaultIndex = 0
-    if (itemIndex >= pass.items.length) itemIndex = Math.max(0, pass.items.length - 1)
+    if (itemIndex >= filteredItems.length) itemIndex = Math.max(0, filteredItems.length - 1)
     if (itemIndex < 0) itemIndex = 0
     if (iconIndex >= itemIcons.length) iconIndex = Math.max(0, itemIcons.length - 1)
     if (iconIndex < 0) iconIndex = 0
@@ -123,7 +144,7 @@ Panel {
     ensureCursor()
 
     if (dx !== 0 && focusSection === "vault") {
-      vaultIndex = Math.max(0, Math.min(pass.vaults.length - 1, vaultIndex + dx))
+      vaultIndex = Math.max(0, Math.min(vaultOptions.length - 1, vaultIndex + dx))
       return
     }
     if (dx !== 0 && focusSection === "items") {
@@ -133,12 +154,12 @@ Panel {
     if (dy === 0) return
 
     if (focusSection === "vault") {
-      if (dy > 0 && itemsReady) { focusSection = "items"; itemIndex = 0; scrollCursorIntoView() }
+      if (dy > 0 && hasVisibleItems) { focusSection = "items"; itemIndex = 0; scrollCursorIntoView() }
       return
     }
     if (focusSection === "items") {
       if (dy < 0 && itemIndex === 0) { focusSection = "vault"; return }
-      itemIndex = Math.max(0, Math.min(pass.items.length - 1, itemIndex + dy))
+      itemIndex = Math.max(0, Math.min(filteredItems.length - 1, itemIndex + dy))
       scrollCursorIntoView()
     }
   }
@@ -150,7 +171,7 @@ Panel {
     else if (focusSection === "vault") vaultPicker.toggle()
     else if (focusSection === "items") {
       var icon = itemIcons[iconIndex]
-      if (icon) copyItemIcon(pass.items[itemIndex], icon.kind)
+      if (icon) copyItemIcon(focusedItem, icon.kind)
     }
   }
 
@@ -181,6 +202,7 @@ Panel {
     pass.panelOpen = opened
     if (opened) {
       cursorActive = false
+      filterQuery = ""
       if (panelFlick) panelFlick.contentY = 0
       pass.refresh()
       pass.loadVaults(false)
@@ -249,18 +271,20 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      // While the vault dropdown's popup is open it owns the keyboard
-      // (its own list handles j/k/Enter/Esc) — same guard the VPN plugin
-      // uses for its Mode/Apps popups.
-      blocked: vaultPicker.popupOpen
+      // The filter field owns the keyboard while it has focus, and the
+      // vault dropdown's popup owns it while open — otherwise every letter
+      // would drive the cursor instead of the input.
+      blocked: vaultPicker.popupOpen || filterField.activeFocus
       onMoveRequested: function(dx, dy) {
         if (!root.cursorActive) { root.cursorActive = true; return }
         root.moveCursor(dx, dy)
       }
       onActivateRequested: if (root.cursorActive) root.activateCursor()
-      // Esc backs out of an expanded item first, then closes the panel.
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      onTextKey: function(t) {
+        if (t === "/" && root.itemsReady) filterField.forceActiveFocus()
+      }
 
       Flickable {
         id: panelFlick
@@ -392,20 +416,68 @@ Panel {
               text: {
                 if (pass.itemsError !== "") return pass.itemsError
                 if (pass.itemsLoading || pass.itemsShareId !== root.activeShareId) return "Loading items…"
-                if (pass.items.length === 0) return "No items in “" + root.activeVaultName + "”."
+                if (pass.items.length === 0)
+                  return root.allView ? "No items yet." : "No items in “" + root.activeVaultName + "”."
                 return ""
               }
             }
 
-            // The item rows.
+            // Filter, focused with "/". Same shape as the VPN plugin's
+            // country filter.
+            TextField {
+              id: filterField
+              visible: root.itemsReady
+              width: parent.width
+              foreground: root.foreground
+              placeholderText: "Filter items  (press /)"
+              text: root.filterQuery
+              onTextChanged: root.filterQuery = text
+              Keys.onEscapePressed: function(event) {
+                if (text !== "") text = ""
+                keyCatcher.forceActiveFocus()
+                event.accepted = true
+              }
+              // Down / Enter jumps into the list.
+              Keys.onReturnPressed: function(event) {
+                if (root.hasVisibleItems) {
+                  root.cursorActive = true
+                  root.focusSection = "items"
+                  root.itemIndex = 0
+                }
+                keyCatcher.forceActiveFocus()
+                event.accepted = true
+              }
+              Keys.onDownPressed: function(event) {
+                if (root.hasVisibleItems) {
+                  root.cursorActive = true
+                  root.focusSection = "items"
+                  root.itemIndex = 0
+                }
+                keyCatcher.forceActiveFocus()
+                event.accepted = true
+              }
+            }
+
+            Text {
+              visible: root.itemsReady && root.filterQuery !== "" && root.filteredItems.length === 0
+              width: parent.width
+              text: "No items match “" + root.filterQuery + "”."
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              horizontalAlignment: Text.AlignHCenter
+            }
+
+            // The item rows (post-filter).
             Column {
               id: itemColumn
               width: parent.width
               spacing: Style.space(4)
-              visible: root.itemsReady
+              visible: root.hasVisibleItems
 
               Repeater {
-                model: root.itemsReady ? pass.items : []
+                model: root.hasVisibleItems ? root.filteredItems : []
                 ItemRow {
                   required property var modelData
                   required property int index
@@ -545,7 +617,16 @@ Panel {
         }
         Text {
           Layout.fillWidth: true
-          text: itemRow.item ? Model.typeLabel(itemRow.item.type) : ""
+          // In the merged "All items" view, name the vault each item is in.
+          text: {
+            if (!itemRow.item) return ""
+            var label = Model.typeLabel(itemRow.item.type)
+            if (root.allView) {
+              var v = root.vaultNameFor(itemRow.item.shareId)
+              if (v !== "") return v + " · " + label
+            }
+            return label
+          }
           textFormat: Text.PlainText
           color: root.dim
           font.family: root.fontFamily
