@@ -20,7 +20,7 @@ Panel {
 
   // ── Keyboard cursor: which region has focus, and where inside it ───────
   //   hero     — heroIndex 0=settings gear, 1=sign out
-  //   settings — settingsIndex over the clipboard-clear choices (strip open)
+  //   settings — settingsIndex over the settings-strip controls (strip open)
   //   unlock   — the single "Unlock" row (locked session)
   //   vault    — vaultIndex over the badge carousel
   //   items    — itemIndex over rows, iconIndex over a row's copy icons
@@ -129,6 +129,13 @@ Panel {
     pass.logout()
   }
 
+  // The settings strip as a flat list of controls, left-to-right / top-to-
+  // bottom: the four clipboard-clear choices, then the notify off/on pair.
+  readonly property var settingsControls: [
+    { k: "clear", v: 0 }, { k: "clear", v: 15 }, { k: "clear", v: 30 }, { k: "clear", v: 60 },
+    { k: "notify", v: false }, { k: "notify", v: true }
+  ]
+
   function toggleSettings() {
     settingsOpen = !settingsOpen
     if (settingsOpen) {
@@ -136,6 +143,13 @@ Panel {
     } else if (focusSection === "settings") {
       focusSection = "hero"; heroIndex = 0
     }
+  }
+
+  function applySettingsControl(i) {
+    var c = settingsControls[i]
+    if (!c) return
+    if (c.k === "clear") pass.setClipboardClearSec(c.v)
+    else pass.setNotifyOnCopy(c.v)
   }
 
   // Which sections exist right now, top to bottom, as data — the arrow-key
@@ -154,7 +168,7 @@ Panel {
     var list = sectionList()
     if (list.indexOf(focusSection) === -1) focusSection = list[0]
     heroIndex = Math.max(0, Math.min(1, heroIndex))
-    settingsIndex = Math.max(0, Math.min(pass.clipboardClearChoices.length - 1, settingsIndex))
+    settingsIndex = Math.max(0, Math.min(settingsControls.length - 1, settingsIndex))
     if (vaultIndex >= vaultOptions.length) vaultIndex = Math.max(0, vaultOptions.length - 1)
     if (vaultIndex < 0) vaultIndex = 0
     if (itemIndex >= filteredItems.length) itemIndex = Math.max(0, filteredItems.length - 1)
@@ -172,7 +186,7 @@ Panel {
     if (dx !== 0) {
       if (focusSection === "hero") heroIndex = Math.max(0, Math.min(1, heroIndex + dx))
       else if (focusSection === "settings")
-        settingsIndex = Math.max(0, Math.min(pass.clipboardClearChoices.length - 1, settingsIndex + dx))
+        settingsIndex = Math.max(0, Math.min(settingsControls.length - 1, settingsIndex + dx))
       else if (focusSection === "vault") {
         vaultIndex = Math.max(0, Math.min(vaultOptions.length - 1, vaultIndex + dx))
         scrollVaultIntoView()
@@ -197,7 +211,7 @@ Panel {
     else if (focusSection === "login") pass.login()
     else if (focusSection === "unlock") pass.unlock()
     else if (focusSection === "hero") { if (heroIndex === 0) toggleSettings(); else requestSignOut() }
-    else if (focusSection === "settings") pass.setClipboardClearSec(pass.clipboardClearChoices[settingsIndex])
+    else if (focusSection === "settings") applySettingsControl(settingsIndex)
     else if (focusSection === "vault") { if (hasVisibleItems) { focusSection = "items"; itemIndex = 0; scrollCursorIntoView() } }
     else if (focusSection === "items") {
       var icon = itemIcons[iconIndex]
@@ -438,6 +452,44 @@ Panel {
                     root.focusSection = "settings"
                     root.settingsIndex = index
                     pass.setClipboardClearSec(modelData)
+                  }
+                }
+              }
+            }
+
+            Text {
+              width: parent.width
+              text: "Desktop notification when a field is copied"
+              textFormat: Text.PlainText
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+              topPadding: Style.space(4)
+            }
+
+            Row {
+              spacing: Style.space(6)
+
+              Repeater {
+                // index 0 → Off, 1 → On; global settingsIndex offset is 4.
+                model: [{ label: "Off", on: false }, { label: "On", on: true }]
+                Button {
+                  required property var modelData
+                  required property int index
+                  text: modelData.label
+                  bordered: true
+                  fontSize: Style.font.bodySmall
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  active: pass.notifyOnCopy === modelData.on
+                  hasCursor: root.cursorActive && root.focusSection === "settings"
+                             && root.settingsIndex === 4 + index
+                  onClicked: {
+                    root.cursorActive = true
+                    root.focusSection = "settings"
+                    root.settingsIndex = 4 + index
+                    pass.setNotifyOnCopy(modelData.on)
                   }
                 }
               }

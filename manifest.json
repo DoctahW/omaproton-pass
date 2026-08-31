@@ -19,8 +19,7 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "refreshIntervalSec": 45,
-      "clipboardClearSec": "30"
+      "refreshIntervalSec": 45
     },
     "schema": [
       {
@@ -31,18 +30,6 @@
         "max": 3600,
         "step": 5,
         "defaultValue": 45
-      },
-      {
-        "key": "clipboardClearSec",
-        "type": "enum",
-        "label": "Clear clipboard after copying a password",
-        "options": [
-          { "value": "off", "label": "Don't clear" },
-          { "value": "15", "label": "After 15 seconds" },
-          { "value": "30", "label": "After 30 seconds" },
-          { "value": "60", "label": "After 60 seconds" }
-        ],
-        "defaultValue": "30"
       }
     ]
   }

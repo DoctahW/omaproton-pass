@@ -122,6 +122,14 @@ function loginIdentifier(detail) {
   return detail.username !== "" ? detail.username : detail.email
 }
 
+// The `period` (seconds per code) from an otpauth:// URI; 30 if absent
+// or unparseable — the RFC 6238 default.
+function totpPeriodFromUri(uri) {
+  var m = String(uri || "").match(/[?&]period=(\d+)/)
+  var n = m ? parseInt(m[1], 10) : 30
+  return (isFinite(n) && n > 0) ? n : 30
+}
+
 // Case-insensitive substring filter over item titles. Empty query returns
 // the list unchanged (same object, so bindings don't churn).
 function filterItems(items, query) {
