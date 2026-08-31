@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.doctahw.omaproton-pass",
+  "name": "OmaProton Pass",
+  "version": "0.1.0",
+  "author": "doctahw",
+  "license": "MIT",
+  "description": "Proton Pass in the Omarchy bar: browse your vaults and copy usernames and passwords in one click, in your theme.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "OmaProton Pass",
+    "description": "Browse Proton Pass vaults and copy usernames, passwords and TOTP codes without leaving the bar.",
+    "category": "Security",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 45,
+      "clipboardClearSec": "30"
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Session check interval (seconds)",
+        "min": 10,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 45
+      },
+      {
+        "key": "clipboardClearSec",
+        "type": "enum",
+        "label": "Clear clipboard after copying a password",
+        "options": [
+          { "value": "off", "label": "Don't clear" },
+          { "value": "15", "label": "After 15 seconds" },
+          { "value": "30", "label": "After 30 seconds" },
+          { "value": "60", "label": "After 60 seconds" }
+        ],
+        "defaultValue": "30"
+      }
+    ]
+  }
+}
