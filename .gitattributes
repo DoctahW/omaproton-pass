@@ -1,0 +1,4 @@
+*.qml   text diff
+*.js    text diff
+*.json  text diff
+*.md    text diff
