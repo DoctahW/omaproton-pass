@@ -275,6 +275,10 @@ Panel {
       ensureCursor()
       if (activeShareId !== "") pass.loadItems(activeShareId, false)
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    } else {
+      // Panel closed (which is also what happens when you lock the
+      // screen or focus moves away): drop every fetched secret.
+      pass.wipeSecrets()
     }
   }
 

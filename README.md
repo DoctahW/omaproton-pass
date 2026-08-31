@@ -70,6 +70,10 @@ two settings above); delete it if you like.
   single-quoted with Omarchy's shared `Util.shellQuote` first.
 - Item secrets are read only when you actually copy a field — `pass-cli item
   view` is not called just by opening the panel or listing a vault.
+- A fetched login is dropped from memory when the panel closes (which is
+  also what happens when you lock the screen), and after 90 seconds of
+  inactivity while it's open. For a stronger gate, turn on Proton Pass's
+  session lock / extra password — the panel already handles the unlock.
 - Copied passwords and TOTP codes are marked `--sensitive` for the
   compositor, and the clipboard is wiped after the configured delay **only
   if it still holds the value this plugin put there**.
