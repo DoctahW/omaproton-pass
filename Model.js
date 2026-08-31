@@ -122,6 +122,20 @@ function typeLabel(type) {
   }
 }
 
+// The inline copy icons a row offers, by item type. Order matters: it's
+// also the left-to-right keyboard order. Login items get user / password /
+// TOTP; other types get nothing for now.
+function copyIconsFor(type) {
+  if (String(type || "") === "login") {
+    return [
+      { kind: "username", glyph: "󰀄", tip: "Copy username" }, // 󰀄 account
+      { kind: "password", glyph: "󰌆", tip: "Copy password" }, // 󰌆 key
+      { kind: "totp",     glyph: "󰥔", tip: "Copy TOTP code" } // 󰥔 clock
+    ]
+  }
+  return []
+}
+
 // A Nerd Font glyph per item type, so the list reads at a glance.
 function typeGlyph(type) {
   switch (String(type || "")) {

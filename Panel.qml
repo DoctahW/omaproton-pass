@@ -25,7 +25,26 @@ Panel {
   property string focusSection: "header"
   property int vaultIndex: 0
   property int itemIndex: 0
+  // Sub-cursor across the focused row's inline copy icons.
+  property int iconIndex: 0
   property bool cursorActive: false
+
+  // The copy icons the focused item offers (also the left/right order).
+  readonly property var itemIcons:
+    Model.copyIconsFor(pass.items[itemIndex] ? pass.items[itemIndex].type : "")
+
+  onItemIndexChanged: iconIndex = 0
+
+  function itemKey(it) {
+    return it ? (String(it.shareId) + "/" + String(it.id)) : ""
+  }
+
+  // One click / keypress = copy that field. The Service fetches the item's
+  // detail if it isn't cached and copies once it lands.
+  function copyItemIcon(it, kind) {
+    if (!it || !kind) return
+    pass.copyItemField(it.shareId, it.id, kind)
+  }
 
   // The vault whose tab is selected. "" until vaults arrive.
   readonly property string activeShareId:
@@ -54,6 +73,7 @@ Panel {
   // panel is open). loadItems() serves its cache instantly on a re-visit.
   onActiveShareIdChanged: {
     itemIndex = 0
+    iconIndex = 0
     if (opened && activeShareId !== "") pass.loadItems(activeShareId, false)
   }
 
@@ -91,18 +111,23 @@ Panel {
     if (vaultIndex < 0) vaultIndex = 0
     if (itemIndex >= pass.items.length) itemIndex = Math.max(0, pass.items.length - 1)
     if (itemIndex < 0) itemIndex = 0
+    if (iconIndex >= itemIcons.length) iconIndex = Math.max(0, itemIcons.length - 1)
+    if (iconIndex < 0) iconIndex = 0
   }
 
-  // Two axes now: left/right stays on the vault tabs; up/down moves between
-  // the tabs row and the item list, then through the items.
+  // left/right: on the vault picker, step vaults; on an item row, move
+  // across its copy icons. up/down: move between the picker and the list,
+  // then through the items.
   function moveCursor(dx, dy) {
     cursorActive = true
     ensureCursor()
 
-    // On the vault picker, left/right steps through vaults without opening
-    // the popup — a quick way to flip between two vaults.
     if (dx !== 0 && focusSection === "vault") {
       vaultIndex = Math.max(0, Math.min(pass.vaults.length - 1, vaultIndex + dx))
+      return
+    }
+    if (dx !== 0 && focusSection === "items") {
+      iconIndex = Math.max(0, Math.min(itemIcons.length - 1, iconIndex + dx))
       return
     }
     if (dy === 0) return
@@ -123,11 +148,14 @@ Panel {
     if (focusSection === "install") Qt.openUrlExternally("https://proton.me/pass/download/linux")
     else if (focusSection === "login") pass.login()
     else if (focusSection === "vault") vaultPicker.toggle()
-    // Enter on an item opens its copy actions — Marco 5.
+    else if (focusSection === "items") {
+      var icon = itemIcons[iconIndex]
+      if (icon) copyItemIcon(pass.items[itemIndex], icon.kind)
+    }
   }
 
-  // Keep the selected item row visible as the cursor walks the list
-  // (mirrors the dropbox plugin's scrollCursorIntoView).
+  // Keep the selected row visible as the cursor walks the list (mirrors
+  // the dropbox plugin's scrollCursorIntoView).
   function scrollCursorIntoView() {
     if (focusSection !== "items" || !itemColumn) return
     var item = itemColumn.children[itemIndex]
@@ -230,6 +258,7 @@ Panel {
         root.moveCursor(dx, dy)
       }
       onActivateRequested: if (root.cursorActive) root.activateCursor()
+      // Esc backs out of an expanded item first, then closes the panel.
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
@@ -328,11 +357,27 @@ Panel {
             width: parent.width
             spacing: Style.space(8)
 
-            PanelSectionHeader {
-              text: root.activeVaultName.toUpperCase()
-              textFormat: Text.PlainText
-              foreground: root.foreground
-              fontFamily: root.fontFamily
+            RowLayout {
+              width: parent.width
+              spacing: Style.space(6)
+
+              PanelSectionHeader {
+                text: root.activeVaultName.toUpperCase()
+                textFormat: Text.PlainText
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                Layout.fillWidth: true
+              }
+
+              // Transient feedback for a copy that hit an empty field.
+              Text {
+                visible: pass.copyNote !== ""
+                text: pass.copyNote
+                textFormat: Text.PlainText
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
             }
 
             // Loading / empty / error line for the current vault.
@@ -440,35 +485,36 @@ Panel {
     }
   }
 
-  // One Proton Pass item: type glyph + title + type label. Selectable by
-  // mouse or keyboard; Enter/click will open copy actions in Marco 5.
+  // One Proton Pass item: type glyph + title + type label, and — for
+  // logins — a cluster of inline copy icons on the trailing edge. Click an
+  // icon (or ←/→ + Enter) to copy that field straight away.
   component ItemRow: CursorSurface {
     id: itemRow
     property var item: null
     property int rowIndex: 0
+    readonly property string rowKey: root.itemKey(item)
+    readonly property var icons: Model.copyIconsFor(item ? item.type : "")
+    readonly property bool rowFocused:
+      root.cursorActive && root.focusSection === "items" && root.itemIndex === rowIndex
 
-    hasCursor: root.cursorActive && root.focusSection === "items" && root.itemIndex === rowIndex
+    // The row itself only shows the cursor ring when no icon is targeted,
+    // so the ring lands on one place at a time.
+    hasCursor: rowFocused && icons.length === 0
     foreground: root.foreground
-    implicitHeight: itemContent.implicitHeight + Style.spacing.rowPaddingX
+    implicitHeight: rowLayout.implicitHeight + Style.spacing.rowPaddingX
 
     MouseArea {
       anchors.fill: parent
       hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
       onEntered: {
         root.cursorActive = true
         root.focusSection = "items"
         root.itemIndex = itemRow.rowIndex
       }
-      onClicked: {
-        root.cursorActive = true
-        root.focusSection = "items"
-        root.itemIndex = itemRow.rowIndex
-        root.activateCursor()
-      }
     }
 
     RowLayout {
+      id: rowLayout
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
@@ -485,7 +531,6 @@ Panel {
       }
 
       ColumnLayout {
-        id: itemContent
         Layout.fillWidth: true
         spacing: Style.space(1)
 
@@ -508,6 +553,78 @@ Panel {
           elide: Text.ElideRight
         }
       }
+
+      // Inline copy icons (logins only, for now).
+      Row {
+        spacing: Style.space(2)
+        Layout.alignment: Qt.AlignVCenter
+
+        Repeater {
+          model: itemRow.icons
+          IconButton {
+            required property var modelData
+            required property int index
+            glyph: modelData.glyph
+            tip: modelData.tip
+            iconIdx: index
+            row: itemRow
+          }
+        }
+      }
+    }
+  }
+
+  // A single inline copy icon. Copies its field on click; shows a check
+  // for a moment after a successful copy of that exact field on this item.
+  component IconButton: CursorSurface {
+    id: iconBtn
+    property string glyph: ""
+    property string tip: ""
+    property int iconIdx: 0
+    property var row: null
+    readonly property bool targeted:
+      root.cursorActive && root.focusSection === "items"
+      && root.itemIndex === row.rowIndex && root.iconIndex === iconIdx
+    readonly property var kind: row && row.icons[iconIdx] ? row.icons[iconIdx].kind : ""
+    readonly property bool justCopied:
+      pass.copiedField === kind && pass.copiedKey === (row ? row.rowKey : "")
+
+    hasCursor: targeted
+    foreground: root.foreground
+    implicitWidth: Style.space(26)
+    implicitHeight: Style.space(26)
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onEntered: {
+        root.cursorActive = true
+        root.focusSection = "items"
+        root.itemIndex = iconBtn.row.rowIndex
+        root.iconIndex = iconBtn.iconIdx
+      }
+      onClicked: {
+        root.cursorActive = true
+        root.focusSection = "items"
+        root.itemIndex = iconBtn.row.rowIndex
+        root.iconIndex = iconBtn.iconIdx
+        root.copyItemIcon(iconBtn.row.item, iconBtn.kind)
+      }
+
+      PanelToolTip {
+        visible: parent.containsMouse
+        text: iconBtn.tip
+        fontFamily: root.fontFamily
+      }
+    }
+
+    Text {
+      anchors.centerIn: parent
+      text: iconBtn.justCopied ? "󰄬" : iconBtn.glyph
+      color: iconBtn.justCopied || iconBtn.targeted ? root.foreground : root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.body
     }
   }
 }
