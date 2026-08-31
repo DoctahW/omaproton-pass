@@ -9,12 +9,9 @@ import "Model.js" as Model
 
 // OmaProton Pass — bar widget + panel, one file (same as the VPN plugin).
 //
-// Marco 1: install/session/sign-in + a tab per vault.
-// Marco 3: the Service loads a vault's items on demand.
-// Marco 4: render those items as rows with a two-axis keyboard cursor.
-// Marco 4b: the vault picker moved into a compact dropdown pinned to the
-//           top-right of the hero, freeing the panel for the item list.
-//           Copying a field is Marco 5.
+// Layout: hero with a settings gear + sign-out icon on its trailing edge;
+// a horizontal carousel of vault badges ("All items" first); a "/" filter;
+// then the item list, each login row carrying inline copy icons.
 Panel {
   id: root
   moduleName: "io.github.doctahw.omaproton-pass"
@@ -22,12 +19,21 @@ Panel {
   manageIpc: false
 
   // ── Keyboard cursor: which region has focus, and where inside it ───────
+  //   hero     — heroIndex 0=settings gear, 1=sign out
+  //   settings — settingsIndex over the clipboard-clear choices (strip open)
+  //   unlock   — the single "Unlock" row (locked session)
+  //   vault    — vaultIndex over the badge carousel
+  //   items    — itemIndex over rows, iconIndex over a row's copy icons
   property string focusSection: "header"
+  property int heroIndex: 0
+  property int settingsIndex: 0
   property int vaultIndex: 0
   property int itemIndex: 0
-  // Sub-cursor across the focused row's inline copy icons.
   property int iconIndex: 0
   property bool cursorActive: false
+
+  // The settings strip under the hero (toggled by the gear).
+  property bool settingsOpen: false
 
   // Text typed into the "/" filter. Narrows the vault's item list by title.
   property string filterQuery: ""
@@ -113,21 +119,42 @@ Panel {
     return pass.account !== "" ? pass.account : "Unlocked"
   }
 
-  // Which sections exist right now, top to bottom. Keeping this as data
-  // (not scattered if-checks) is what makes arrow-key navigation simple.
-  // "header" is only used as a fallback while there's nothing else to
-  // focus — it has no visible cursor yet, so we never park on it when a
-  // real target (the vault tabs) exists.
+  // Sign out is destructive (it clears the local session), so it takes two
+  // clicks within five seconds — same rule as the VPN plugin.
+  property bool signOutArmed: false
+  Timer { id: signOutArm; interval: 5000; onTriggered: root.signOutArmed = false }
+  function requestSignOut() {
+    if (!signOutArmed) { signOutArmed = true; signOutArm.restart(); return }
+    signOutArmed = false
+    pass.logout()
+  }
+
+  function toggleSettings() {
+    settingsOpen = !settingsOpen
+    if (settingsOpen) {
+      settingsIndex = Math.max(0, pass.clipboardClearChoices.indexOf(pass.clipboardClearSec))
+    } else if (focusSection === "settings") {
+      focusSection = "hero"; heroIndex = 0
+    }
+  }
+
+  // Which sections exist right now, top to bottom, as data — the arrow-key
+  // state machine just walks this list.
   function sectionList() {
     if (!pass.installed) return ["install"]
     if (!pass.loggedIn) return ["login"]
-    if (pass.vaults.length === 0) return ["header"]
-    return hasVisibleItems ? ["vault", "items"] : ["vault"]
+    var head = ["hero"]
+    if (settingsOpen) head.push("settings")
+    if (pass.sessionLocked) return head.concat(["unlock"])
+    if (pass.vaults.length === 0) return head
+    return head.concat(hasVisibleItems ? ["vault", "items"] : ["vault"])
   }
 
   function ensureCursor() {
     var list = sectionList()
     if (list.indexOf(focusSection) === -1) focusSection = list[0]
+    heroIndex = Math.max(0, Math.min(1, heroIndex))
+    settingsIndex = Math.max(0, Math.min(pass.clipboardClearChoices.length - 1, settingsIndex))
     if (vaultIndex >= vaultOptions.length) vaultIndex = Math.max(0, vaultOptions.length - 1)
     if (vaultIndex < 0) vaultIndex = 0
     if (itemIndex >= filteredItems.length) itemIndex = Math.max(0, filteredItems.length - 1)
@@ -136,43 +163,64 @@ Panel {
     if (iconIndex < 0) iconIndex = 0
   }
 
-  // left/right: on the vault picker, step vaults; on an item row, move
-  // across its copy icons. up/down: move between the picker and the list,
-  // then through the items.
+  // left/right moves within a section (hero buttons, settings choices,
+  // vault badges, a row's copy icons); up/down moves between sections.
   function moveCursor(dx, dy) {
     cursorActive = true
     ensureCursor()
 
-    if (dx !== 0 && focusSection === "vault") {
-      vaultIndex = Math.max(0, Math.min(vaultOptions.length - 1, vaultIndex + dx))
-      return
-    }
-    if (dx !== 0 && focusSection === "items") {
-      iconIndex = Math.max(0, Math.min(itemIcons.length - 1, iconIndex + dx))
+    if (dx !== 0) {
+      if (focusSection === "hero") heroIndex = Math.max(0, Math.min(1, heroIndex + dx))
+      else if (focusSection === "settings")
+        settingsIndex = Math.max(0, Math.min(pass.clipboardClearChoices.length - 1, settingsIndex + dx))
+      else if (focusSection === "vault") {
+        vaultIndex = Math.max(0, Math.min(vaultOptions.length - 1, vaultIndex + dx))
+        scrollVaultIntoView()
+      } else if (focusSection === "items")
+        iconIndex = Math.max(0, Math.min(itemIcons.length - 1, iconIndex + dx))
       return
     }
     if (dy === 0) return
 
-    if (focusSection === "vault") {
-      if (dy > 0 && hasVisibleItems) { focusSection = "items"; itemIndex = 0; scrollCursorIntoView() }
-      return
-    }
-    if (focusSection === "items") {
-      if (dy < 0 && itemIndex === 0) { focusSection = "vault"; return }
-      itemIndex = Math.max(0, Math.min(filteredItems.length - 1, itemIndex + dy))
-      scrollCursorIntoView()
-    }
+    var list = sectionList()
+    var pos = list.indexOf(focusSection)
+    var next = pos + (dy > 0 ? 1 : -1)
+    if (next < 0 || next >= list.length) return
+    focusSection = list[next]
+    if (focusSection === "items") { itemIndex = 0; scrollCursorIntoView() }
+    if (focusSection === "vault") scrollVaultIntoView()
   }
 
   function activateCursor() {
     ensureCursor()
     if (focusSection === "install") Qt.openUrlExternally("https://proton.me/pass/download/linux")
     else if (focusSection === "login") pass.login()
-    else if (focusSection === "vault") vaultPicker.toggle()
+    else if (focusSection === "unlock") pass.unlock()
+    else if (focusSection === "hero") { if (heroIndex === 0) toggleSettings(); else requestSignOut() }
+    else if (focusSection === "settings") pass.setClipboardClearSec(pass.clipboardClearChoices[settingsIndex])
+    else if (focusSection === "vault") { if (hasVisibleItems) { focusSection = "items"; itemIndex = 0; scrollCursorIntoView() } }
     else if (focusSection === "items") {
       var icon = itemIcons[iconIndex]
       if (icon) copyItemIcon(focusedItem, icon.kind)
     }
+  }
+
+  // Scroll the selected vault badge into view horizontally.
+  function scrollVaultIntoView() {
+    if (focusSection !== "vault" || !vaultRow || !vaultStrip) return
+    var badge = vaultRow.children[vaultIndex]
+    if (!badge) return
+    Qt.callLater(function() {
+      if (!badge) return
+      var margin = Style.space(8)
+      var left = badge.x
+      var right = left + badge.width
+      var viewLeft = vaultStrip.contentX
+      var viewRight = viewLeft + vaultStrip.width
+      var maxX = Math.max(0, vaultStrip.contentWidth - vaultStrip.width)
+      if (left < viewLeft + margin) vaultStrip.contentX = Math.max(0, left - margin)
+      else if (right > viewRight - margin) vaultStrip.contentX = Math.min(maxX, right + margin - vaultStrip.width)
+    })
   }
 
   // Keep the selected row visible as the cursor walks the list (mirrors
@@ -203,6 +251,10 @@ Panel {
     if (opened) {
       cursorActive = false
       filterQuery = ""
+      signOutArmed = false
+      settingsOpen = false
+      heroIndex = 0
+      settingsIndex = 0
       if (panelFlick) panelFlick.contentY = 0
       pass.refresh()
       pass.loadVaults(false)
@@ -265,47 +317,50 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(360))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(560))
+    contentWidth: panel.fittedContentWidth(Style.space(336))
+    // Header (hero → filter) is fixed; only the item list scrolls, capped
+    // so the panel doesn't grow past `Style.space(560)`.
+    contentHeight: panel.fittedContentHeight(
+      headerBox.implicitHeight
+      + (root.hasVisibleItems ? Style.space(8) + Math.min(itemColumn.implicitHeight, Style.space(320)) : 0),
+      Style.space(560))
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      // The filter field owns the keyboard while it has focus, and the
-      // vault dropdown's popup owns it while open — otherwise every letter
-      // would drive the cursor instead of the input.
-      blocked: vaultPicker.popupOpen || filterField.activeFocus
+      // The filter field owns the keyboard while it has focus — otherwise
+      // every letter would drive the cursor instead of the input.
+      blocked: filterField.activeFocus
       onMoveRequested: function(dx, dy) {
         if (!root.cursorActive) { root.cursorActive = true; return }
         root.moveCursor(dx, dy)
       }
       onActivateRequested: if (root.cursorActive) root.activateCursor()
-      onCloseRequested: root.close()
+      // Esc closes the settings strip first, then the panel.
+      onCloseRequested: root.settingsOpen ? root.toggleSettings() : root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         if (t === "/" && root.itemsReady) filterField.forceActiveFocus()
       }
 
-      Flickable {
-        id: panelFlick
+      Item {
         anchors.fill: parent
-        contentWidth: width
-        contentHeight: column.implicitHeight
-        clip: true
-        boundsBehavior: Flickable.StopAtBounds
-        flickableDirection: Flickable.VerticalFlick
-        interactive: contentHeight > height
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
+        // Fixed header: hero, settings strip, sign-in/unlock rows, the
+        // vault carousel and the filter. Everything down to the filter
+        // stays put; only the list below scrolls.
         Column {
-          id: column
-          width: panelFlick.width
+          id: headerBox
+          anchors.top: parent.top
+          anchors.left: parent.left
+          anchors.right: parent.right
           spacing: Style.space(12)
 
-          // Header / hero, with the vault picker pinned to its top-right.
+          // Header / hero, with the settings gear + sign-out on its
+          // trailing edge.
           RowLayout {
             width: parent.width
-            spacing: Style.space(8)
+            spacing: Style.space(6)
 
             PanelHero {
               id: hero
@@ -323,20 +378,68 @@ Panel {
               }
             }
 
-            Dropdown {
-              id: vaultPicker
-              visible: pass.loggedIn && pass.vaults.length > 0
+            HeroButton {
+              visible: pass.loggedIn
               Layout.alignment: Qt.AlignTop
-              Layout.preferredWidth: Style.space(150)
-              showLabel: false
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              options: root.vaultOptions
-              value: root.activeShareId
-              hasCursor: root.cursorActive && root.focusSection === "vault"
-              onChanged: function(v) { root.selectVaultByShareId(v) }
-              onHovered: function(on) {
-                if (on) { root.cursorActive = true; root.focusSection = "vault" }
+              glyph: "󰒓"
+              tip: "Settings"
+              active: root.settingsOpen
+              hasCursor: root.cursorActive && root.focusSection === "hero" && root.heroIndex === 0
+              onEntered: { root.cursorActive = true; root.focusSection = "hero"; root.heroIndex = 0 }
+              onActivated: root.toggleSettings()
+            }
+
+            HeroButton {
+              visible: pass.loggedIn
+              Layout.alignment: Qt.AlignTop
+              glyph: "󰍃"
+              tip: root.signOutArmed ? "Click again to sign out" : "Sign out"
+              urgentTint: root.signOutArmed
+              hasCursor: root.cursorActive && root.focusSection === "hero" && root.heroIndex === 1
+              Layout.rightMargin: -Style.space(4)
+              onEntered: { root.cursorActive = true; root.focusSection = "hero"; root.heroIndex = 1 }
+              onActivated: root.requestSignOut()
+            }
+          }
+
+          // Settings strip (toggled by the gear).
+          Column {
+            visible: pass.loggedIn && root.settingsOpen
+            width: parent.width
+            spacing: Style.space(6)
+
+            Text {
+              width: parent.width
+              text: "Clear clipboard after copying a password"
+              textFormat: Text.PlainText
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+
+            Row {
+              spacing: Style.space(6)
+
+              Repeater {
+                model: pass.clipboardClearChoices
+                Button {
+                  required property var modelData
+                  required property int index
+                  text: modelData === 0 ? "Off" : (modelData + "s")
+                  bordered: true
+                  fontSize: Style.font.bodySmall
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  active: pass.clipboardClearSec === modelData
+                  hasCursor: root.cursorActive && root.focusSection === "settings" && root.settingsIndex === index
+                  onClicked: {
+                    root.cursorActive = true
+                    root.focusSection = "settings"
+                    root.settingsIndex = index
+                    pass.setClipboardClearSec(modelData)
+                  }
+                }
               }
             }
           }
@@ -375,33 +478,74 @@ Panel {
             onClicked: pass.login()
           }
 
-          // Signed in: the selected vault's items.
+          // Signed in but the session is lock-protected — reads fail until
+          // `pass-cli unlock`.
+          ActionRow {
+            visible: pass.loggedIn && pass.sessionLocked
+            width: parent.width
+            hasCursor: root.cursorActive && root.focusSection === "unlock"
+            icon: "󰌾"
+            title: "Unlock Proton Pass"
+            subtitle: "Opens a terminal for your unlock password"
+            onClicked: pass.unlock()
+          }
+
+          // Signed in and unlocked: vault carousel + filter (fixed).
           Column {
-            visible: pass.loggedIn && pass.vaults.length > 0
+            id: listHeader
+            visible: pass.loggedIn && !pass.sessionLocked && pass.vaults.length > 0
             width: parent.width
             spacing: Style.space(8)
 
-            RowLayout {
+            // Vault carousel: horizontally scrollable badges, "All items"
+            // first. ←/→ walks them and scrolls the selection into view.
+            Flickable {
+              id: vaultStrip
               width: parent.width
-              spacing: Style.space(6)
+              implicitHeight: vaultRow.implicitHeight
+              contentWidth: vaultRow.implicitWidth
+              contentHeight: vaultRow.implicitHeight
+              clip: true
+              boundsBehavior: Flickable.StopAtBounds
+              flickableDirection: Flickable.HorizontalFlick
+              interactive: contentWidth > width
 
-              PanelSectionHeader {
-                text: root.activeVaultName.toUpperCase()
-                textFormat: Text.PlainText
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                Layout.fillWidth: true
-              }
+              Row {
+                id: vaultRow
+                spacing: Style.space(6)
 
-              // Transient feedback for a copy that hit an empty field.
-              Text {
-                visible: pass.copyNote !== ""
-                text: pass.copyNote
-                textFormat: Text.PlainText
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                Repeater {
+                  model: root.vaultOptions
+                  Button {
+                    required property var modelData
+                    required property int index
+                    text: modelData.label
+                    bordered: true
+                    fontSize: Style.font.bodySmall
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    active: root.vaultIndex === index
+                    hasCursor: root.cursorActive && root.focusSection === "vault" && root.vaultIndex === index
+                    onClicked: {
+                      root.cursorActive = true
+                      root.focusSection = "vault"
+                      root.vaultIndex = index
+                      root.scrollVaultIntoView()
+                    }
+                  }
+                }
               }
+            }
+
+            // Transient feedback for a copy that hit an empty field.
+            Text {
+              visible: pass.copyNote !== ""
+              width: parent.width
+              text: pass.copyNote
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
             }
 
             // Loading / empty / error line for the current vault.
@@ -468,28 +612,82 @@ Panel {
               font.pixelSize: Style.font.caption
               horizontalAlignment: Text.AlignHCenter
             }
+          }
+        }
 
-            // The item rows (post-filter).
-            Column {
-              id: itemColumn
-              width: parent.width
-              spacing: Style.space(4)
-              visible: root.hasVisibleItems
+        // The only scrolling part: the item rows, below the fixed header.
+        Flickable {
+          id: panelFlick
+          anchors.top: headerBox.bottom
+          anchors.topMargin: Style.space(8)
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          contentWidth: width
+          contentHeight: itemColumn.implicitHeight
+          clip: true
+          visible: root.hasVisibleItems
+          boundsBehavior: Flickable.StopAtBounds
+          flickableDirection: Flickable.VerticalFlick
+          interactive: contentHeight > height
+          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-              Repeater {
-                model: root.hasVisibleItems ? root.filteredItems : []
-                ItemRow {
-                  required property var modelData
-                  required property int index
-                  width: itemColumn.width
-                  item: modelData
-                  rowIndex: index
-                }
+          Column {
+            id: itemColumn
+            width: panelFlick.width
+            spacing: Style.space(4)
+
+            Repeater {
+              model: root.hasVisibleItems ? root.filteredItems : []
+              ItemRow {
+                required property var modelData
+                required property int index
+                width: itemColumn.width
+                item: modelData
+                rowIndex: index
               }
             }
           }
         }
       }
+    }
+  }
+
+  // A small icon button on the hero's trailing edge (settings, sign out).
+  component HeroButton: CursorSurface {
+    id: heroBtn
+    property string glyph: ""
+    property string tip: ""
+    property bool active: false
+    property bool urgentTint: false
+    signal entered()
+    signal activated()
+
+    foreground: root.foreground
+    implicitWidth: Style.space(28)
+    implicitHeight: Style.space(28)
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onEntered: heroBtn.entered()
+      onClicked: heroBtn.activated()
+
+      PanelToolTip {
+        visible: parent.containsMouse
+        text: heroBtn.tip
+        fontFamily: root.fontFamily
+      }
+    }
+
+    Text {
+      anchors.centerIn: parent
+      text: heroBtn.glyph
+      color: heroBtn.urgentTint ? root.urgent
+           : (heroBtn.active || heroBtn.hasCursor ? root.foreground : root.dim)
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.body
     }
   }
 
@@ -637,8 +835,9 @@ Panel {
 
       // Inline copy icons (logins only, for now).
       Row {
-        spacing: Style.space(2)
+        spacing: Style.space(1)
         Layout.alignment: Qt.AlignVCenter
+        Layout.rightMargin: -Style.space(4)
 
         Repeater {
           model: itemRow.icons
@@ -672,8 +871,8 @@ Panel {
 
     hasCursor: targeted
     foreground: root.foreground
-    implicitWidth: Style.space(26)
-    implicitHeight: Style.space(26)
+    implicitWidth: Style.space(22)
+    implicitHeight: Style.space(24)
 
     MouseArea {
       anchors.fill: parent
