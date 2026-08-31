@@ -110,6 +110,18 @@ function loginIdentifier(detail) {
   return detail.username !== "" ? detail.username : detail.email
 }
 
+// Human label per item type, for the row subtitle.
+function typeLabel(type) {
+  switch (String(type || "")) {
+    case "login": return "Login"
+    case "note": return "Secure note"
+    case "credit_card": return "Credit card"
+    case "alias": return "Email alias"
+    case "identity": return "Identity"
+    default: return String(type || "Item")
+  }
+}
+
 // A Nerd Font glyph per item type, so the list reads at a glance.
 function typeGlyph(type) {
   switch (String(type || "")) {

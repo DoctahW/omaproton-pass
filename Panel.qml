@@ -9,9 +9,12 @@ import "Model.js" as Model
 
 // OmaProton Pass — bar widget + panel, one file (same as the VPN plugin).
 //
-// Marco 1: the shell of the thing. A bar icon that opens a panel; the panel
-// shows whether pass-cli is installed and signed in, offers sign-in, and
-// renders one tab (pill) per vault. Item lists and copy actions come next.
+// Marco 1: install/session/sign-in + a tab per vault.
+// Marco 3: the Service loads a vault's items on demand.
+// Marco 4: render those items as rows with a two-axis keyboard cursor.
+// Marco 4b: the vault picker moved into a compact dropdown pinned to the
+//           top-right of the hero, freeing the panel for the item list.
+//           Copying a field is Marco 5.
 Panel {
   id: root
   moduleName: "io.github.doctahw.omaproton-pass"
@@ -21,6 +24,7 @@ Panel {
   // ── Keyboard cursor: which region has focus, and where inside it ───────
   property string focusSection: "header"
   property int vaultIndex: 0
+  property int itemIndex: 0
   property bool cursorActive: false
 
   // The vault whose tab is selected. "" until vaults arrive.
@@ -29,9 +33,29 @@ Panel {
   readonly property string activeVaultName:
     pass.vaults[vaultIndex] ? pass.vaults[vaultIndex].name : ""
 
+  // { value: shareId, label: name } for the Dropdown.
+  readonly property var vaultOptions: pass.vaults.map(function(v) {
+    return { value: v.shareId, label: v.name }
+  })
+
+  function selectVaultByShareId(shareId) {
+    for (var i = 0; i < pass.vaults.length; i++) {
+      if (pass.vaults[i].shareId === String(shareId)) { vaultIndex = i; return }
+    }
+  }
+
+  // True once the visible `items` really belong to the selected vault and
+  // there's something to show — the gate for the "items" cursor section.
+  readonly property bool itemsReady:
+    pass.loggedIn && pass.itemsShareId === activeShareId
+    && !pass.itemsLoading && pass.items.length > 0
+
   // Pull the selected vault's items whenever the selection changes (and the
   // panel is open). loadItems() serves its cache instantly on a re-visit.
-  onActiveShareIdChanged: if (opened && activeShareId !== "") pass.loadItems(activeShareId, false)
+  onActiveShareIdChanged: {
+    itemIndex = 0
+    if (opened && activeShareId !== "") pass.loadItems(activeShareId, false)
+  }
 
   // ── Theme shortcuts (identical to the dropbox/VPN plugins) ────────────
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -56,8 +80,8 @@ Panel {
   function sectionList() {
     if (!pass.installed) return ["install"]
     if (!pass.loggedIn) return ["login"]
-    if (pass.vaults.length > 0) return ["vaults"]
-    return ["header"]
+    if (pass.vaults.length === 0) return ["header"]
+    return itemsReady ? ["vault", "items"] : ["vault"]
   }
 
   function ensureCursor() {
@@ -65,17 +89,32 @@ Panel {
     if (list.indexOf(focusSection) === -1) focusSection = list[0]
     if (vaultIndex >= pass.vaults.length) vaultIndex = Math.max(0, pass.vaults.length - 1)
     if (vaultIndex < 0) vaultIndex = 0
+    if (itemIndex >= pass.items.length) itemIndex = Math.max(0, pass.items.length - 1)
+    if (itemIndex < 0) itemIndex = 0
   }
 
+  // Two axes now: left/right stays on the vault tabs; up/down moves between
+  // the tabs row and the item list, then through the items.
   function moveCursor(dx, dy) {
     cursorActive = true
     ensureCursor()
-    // One row of pills for now, so either axis nudges the selection. When
-    // the item list arrives (Marco 4) this grows a real vertical axis.
-    var step = dx !== 0 ? dx : dy
-    if (step === 0) return
-    if (focusSection === "vaults") {
-      vaultIndex = Math.max(0, Math.min(pass.vaults.length - 1, vaultIndex + step))
+
+    // On the vault picker, left/right steps through vaults without opening
+    // the popup — a quick way to flip between two vaults.
+    if (dx !== 0 && focusSection === "vault") {
+      vaultIndex = Math.max(0, Math.min(pass.vaults.length - 1, vaultIndex + dx))
+      return
+    }
+    if (dy === 0) return
+
+    if (focusSection === "vault") {
+      if (dy > 0 && itemsReady) { focusSection = "items"; itemIndex = 0; scrollCursorIntoView() }
+      return
+    }
+    if (focusSection === "items") {
+      if (dy < 0 && itemIndex === 0) { focusSection = "vault"; return }
+      itemIndex = Math.max(0, Math.min(pass.items.length - 1, itemIndex + dy))
+      scrollCursorIntoView()
     }
   }
 
@@ -83,7 +122,28 @@ Panel {
     ensureCursor()
     if (focusSection === "install") Qt.openUrlExternally("https://proton.me/pass/download/linux")
     else if (focusSection === "login") pass.login()
-    // "vaults" activation (open the vault's item list) arrives in Marco 4.
+    else if (focusSection === "vault") vaultPicker.toggle()
+    // Enter on an item opens its copy actions — Marco 5.
+  }
+
+  // Keep the selected item row visible as the cursor walks the list
+  // (mirrors the dropbox plugin's scrollCursorIntoView).
+  function scrollCursorIntoView() {
+    if (focusSection !== "items" || !itemColumn) return
+    var item = itemColumn.children[itemIndex]
+    if (!panelFlick || !item) return
+    Qt.callLater(function() {
+      if (!item) return
+      var margin = Style.space(8)
+      var point = item.mapToItem(panelFlick.contentItem, 0, 0)
+      var top = point.y
+      var bottom = top + item.height
+      var viewTop = panelFlick.contentY
+      var viewBottom = viewTop + panelFlick.height
+      var maxY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
+      if (top < viewTop + margin) panelFlick.contentY = Math.max(0, top - margin)
+      else if (bottom > viewBottom - margin) panelFlick.contentY = Math.min(maxY, bottom + margin - panelFlick.height)
+    })
   }
 
   implicitWidth: button.implicitWidth
@@ -111,6 +171,10 @@ Panel {
     target: pass
     function onLoggedInChanged() { root.ensureCursor() }
     function onVaultsChanged() { root.ensureCursor() }
+    // A fresh item list can be shorter than where the cursor sat, and it
+    // may add or remove the "items" section entirely.
+    function onItemsChanged() { root.ensureCursor() }
+    function onItemsLoadingChanged() { root.ensureCursor() }
   }
 
   IpcHandler {
@@ -157,6 +221,10 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      // While the vault dropdown's popup is open it owns the keyboard
+      // (its own list handles j/k/Enter/Esc) — same guard the VPN plugin
+      // uses for its Mode/Apps popups.
+      blocked: vaultPicker.popupOpen
       onMoveRequested: function(dx, dy) {
         if (!root.cursorActive) { root.cursorActive = true; return }
         root.moveCursor(dx, dy)
@@ -181,19 +249,41 @@ Panel {
           width: panelFlick.width
           spacing: Style.space(12)
 
-          // Header / hero
-          PanelHero {
-            id: hero
+          // Header / hero, with the vault picker pinned to its top-right.
+          RowLayout {
             width: parent.width
-            title: "Proton Pass"
-            meta: root.heroMeta
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            iconComponent: Component {
-              PassIcon {
-                iconSize: Style.font.display
-                color: root.foreground
-                opacity: pass.loggedIn ? 1.0 : 0.55
+            spacing: Style.space(8)
+
+            PanelHero {
+              id: hero
+              Layout.fillWidth: true
+              title: "Proton Pass"
+              meta: root.heroMeta
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              iconComponent: Component {
+                PassIcon {
+                  iconSize: Style.font.display
+                  color: root.foreground
+                  opacity: pass.loggedIn ? 1.0 : 0.55
+                }
+              }
+            }
+
+            Dropdown {
+              id: vaultPicker
+              visible: pass.loggedIn && pass.vaults.length > 0
+              Layout.alignment: Qt.AlignTop
+              Layout.preferredWidth: Style.space(150)
+              showLabel: false
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              options: root.vaultOptions
+              value: root.activeShareId
+              hasCursor: root.cursorActive && root.focusSection === "vault"
+              onChanged: function(v) { root.selectVaultByShareId(v) }
+              onHovered: function(on) {
+                if (on) { root.cursorActive = true; root.focusSection = "vault" }
               }
             }
           }
@@ -232,48 +322,23 @@ Panel {
             onClicked: pass.login()
           }
 
-          // Signed in: one pill per vault
+          // Signed in: the selected vault's items.
           Column {
             visible: pass.loggedIn && pass.vaults.length > 0
             width: parent.width
-            spacing: Style.space(10)
+            spacing: Style.space(8)
 
             PanelSectionHeader {
-              text: "VAULTS"
+              text: root.activeVaultName.toUpperCase()
+              textFormat: Text.PlainText
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
 
-            Flow {
-              id: vaultFlow
-              width: parent.width
-              spacing: Style.space(6)
-
-              Repeater {
-                model: pass.vaults
-                Button {
-                  required property var modelData
-                  required property int index
-                  text: modelData.name
-                  bordered: true
-                  fontSize: Style.font.bodySmall
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  active: root.vaultIndex === index
-                  hasCursor: root.cursorActive && root.focusSection === "vaults" && root.vaultIndex === index
-                  onClicked: {
-                    root.cursorActive = true
-                    root.focusSection = "vaults"
-                    root.vaultIndex = index
-                  }
-                }
-              }
-            }
-
-            // Marco 3 proof-of-life: the item pipeline works, shown as a
-            // count. The actual list of rows is Marco 4.
+            // Loading / empty / error line for the current vault.
             Text {
               width: parent.width
+              visible: text !== ""
               textFormat: Text.PlainText
               color: pass.itemsError !== "" ? root.urgent : root.dim
               font.family: root.fontFamily
@@ -281,10 +346,28 @@ Panel {
               wrapMode: Text.WordWrap
               text: {
                 if (pass.itemsError !== "") return pass.itemsError
-                if (pass.itemsLoading) return "Loading items…"
-                if (pass.itemsShareId !== root.activeShareId) return ""
-                var n = pass.items.length
-                return n + (n === 1 ? " item" : " items") + " in “" + root.activeVaultName + "” — list in Marco 4"
+                if (pass.itemsLoading || pass.itemsShareId !== root.activeShareId) return "Loading items…"
+                if (pass.items.length === 0) return "No items in “" + root.activeVaultName + "”."
+                return ""
+              }
+            }
+
+            // The item rows.
+            Column {
+              id: itemColumn
+              width: parent.width
+              spacing: Style.space(4)
+              visible: root.itemsReady
+
+              Repeater {
+                model: root.itemsReady ? pass.items : []
+                ItemRow {
+                  required property var modelData
+                  required property int index
+                  width: itemColumn.width
+                  item: modelData
+                  rowIndex: index
+                }
               }
             }
           }
@@ -347,6 +430,77 @@ Panel {
           Layout.fillWidth: true
           visible: actionRow.subtitle !== ""
           text: actionRow.subtitle
+          textFormat: Text.PlainText
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
+      }
+    }
+  }
+
+  // One Proton Pass item: type glyph + title + type label. Selectable by
+  // mouse or keyboard; Enter/click will open copy actions in Marco 5.
+  component ItemRow: CursorSurface {
+    id: itemRow
+    property var item: null
+    property int rowIndex: 0
+
+    hasCursor: root.cursorActive && root.focusSection === "items" && root.itemIndex === rowIndex
+    foreground: root.foreground
+    implicitHeight: itemContent.implicitHeight + Style.spacing.rowPaddingX
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onEntered: {
+        root.cursorActive = true
+        root.focusSection = "items"
+        root.itemIndex = itemRow.rowIndex
+      }
+      onClicked: {
+        root.cursorActive = true
+        root.focusSection = "items"
+        root.itemIndex = itemRow.rowIndex
+        root.activateCursor()
+      }
+    }
+
+    RowLayout {
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(10)
+      spacing: Style.space(8)
+
+      Text {
+        text: Model.typeGlyph(itemRow.item ? itemRow.item.type : "")
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.icon
+        Layout.alignment: Qt.AlignVCenter
+      }
+
+      ColumnLayout {
+        id: itemContent
+        Layout.fillWidth: true
+        spacing: Style.space(1)
+
+        Text {
+          Layout.fillWidth: true
+          text: itemRow.item ? itemRow.item.title : ""
+          textFormat: Text.PlainText
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          elide: Text.ElideRight
+        }
+        Text {
+          Layout.fillWidth: true
+          text: itemRow.item ? Model.typeLabel(itemRow.item.type) : ""
           textFormat: Text.PlainText
           color: root.dim
           font.family: root.fontFamily
